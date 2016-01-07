@@ -5,22 +5,28 @@ Simple certificate replacement for load balancers and EBS configurations.
 
 Be careful if two certs have the same name but different paths!!!!
 
+THIS SCRIPT DOES NOT SUPPORT CHANGING PATHS!!!!!!!!!
+
 """
 
 import boto3, sys, re
 
 def verify_certs_exist(source_cert, dest_cert):
     iam_client = boto3.client('iam')
+
+    #Get server certificates
     certs = iam_client.list_server_certificates()
     source_exists = False
     dest_exists = False
 
+    #Split cert name and take last element (the name of the cert), and see if it matches
     for item in certs['ServerCertificateMetadataList']:
         if item['ServerCertificateName'].split("/")[-1] == source_cert:
             source_exists = True
         if item['ServerCertificateName'].split("/")[-1] == dest_cert:
             dest_exists = True
 
+    #Notify if they exist or error and exit if they dont
     if source_exists:
         print("Source certificate " + source_cert + " exists.")
     else:
@@ -35,11 +41,13 @@ def verify_certs_exist(source_cert, dest_cert):
 
 def main(kwargs, args):
 
-    #TODO: Change to false before publishing
+    #TODO: Change to false before production
     dry_run = True
     if "dry-run" in kwargs or "n" in kwargs:
         print("Dry run")
         dry_run = True
+
+    #Assume the cert names are the only two "arguments" (argument is something that doesnt start with '-') 
     try:
         source_cert = args[0]
         dest_cert = args[1]
@@ -47,24 +55,27 @@ def main(kwargs, args):
         print("You must specify a source cert name (from) and a destination cert name (to)")
         sys.exit(1)
 
+    #Verify certs exist
     verify_certs_exist(source_cert, dest_cert)
 
+    #Get list of load balancers
     elb_client = boto3.client('elb')
     load_balancer_list = elb_client.describe_load_balancers()
     ebs_list = list()
         
     for lb in load_balancer_list["LoadBalancerDescriptions"]:
 
-        #Describe tags takes a list
+        #Describe tags takes a list with each load balancer name you want to look up
         lb_name = list()
         lb_name.append(lb["LoadBalancerName"])
         
         #Returns a dictionary
         response = elb_client.describe_tags(LoadBalancerNames=lb_name)
 
-        #We need the TagDescriptions value, which is a list with one element, and we need the Tags value
+        #We need the TagDescriptions value, which is a list with one element (since we only passed in one name), and we need the Tags value
         tags = response["TagDescriptions"][0]["Tags"]
 
+        #Drill down and make sure the listener is HTTPS protocol, make sure source_cert is part of the SSLCertificateId string, and replace that part with dest_cert
         for listener in lb["ListenerDescriptions"]:
             if listener["Listener"]["Protocol"] == "HTTPS":
                 if source_cert in listener["Listener"]["SSLCertificateId"]:
@@ -93,9 +104,7 @@ def parse_sysargs():
                     args.append(arg)
                 continue
             if current_key is not None and not arg.startswith("-"):
-                #kwargs[current_key] = arg
                 args.append(arg)
-                #current_key = None
             else:
                 kwargs[current_key] = None
                 current_key = arg.lstrip('-')
