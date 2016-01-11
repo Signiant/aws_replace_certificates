@@ -11,6 +11,14 @@ THIS SCRIPT DOES NOT SUPPORT CHANGING PATHS!!!!!!!!!
 
 import boto3, sys, re
 
+def list_certs():
+    iam_client = boto3.client('iam')
+    certs = iam_client.list_server_certificates()
+    for item in certs['ServerCertificateMetadataList']:
+        print(item["ServerCertificateName"])
+        print("Expires: " + str(item["Expiration"]))
+        
+
 def verify_certs_exist(source_cert, dest_cert):
     iam_client = boto3.client('iam')
 
@@ -19,34 +27,43 @@ def verify_certs_exist(source_cert, dest_cert):
     source_exists = False
     dest_exists = False
 
-    #Split cert name and take last element (the name of the cert), and see if it matches
+    #Split cert name and take last element (the path and name of the cert), and see if it matches
     for item in certs['ServerCertificateMetadataList']:
-        if item['ServerCertificateName'].split("/")[-1] == source_cert:
+        if item['ServerCertificateName'] == source_cert:
             source_exists = True
-        if item['ServerCertificateName'].split("/")[-1] == dest_cert:
+        if item['ServerCertificateName'] == dest_cert:
             dest_exists = True
 
     #Notify if they exist or error and exit if they dont
     if source_exists:
         print("Source certificate " + source_cert + " exists.")
     else:
-        print("ERROR: Unable to found source certificate: " + source_cert)
+        print("ERROR: Unable to find source certificate: " + source_cert)
         sys.exit(1)
 
     if dest_exists:
         print("Destination certificate " + dest_cert + " exists.")
     else:
-        print("ERROR: Unable to found destination certificate: " + dest_cert)
+        print("ERROR: Unable to find destination certificate: " + dest_cert)
         sys.exit(1)
 
 def main(kwargs, args):
 
-    #TODO: Change to false before production
+    if "list" in kwargs or "l" in kwargs or "list" in args:
+        list_certs()
+        sys.exit(0)
+
     dry_run = False
     if "dry-run" in kwargs or "n" in kwargs:
         print("Dry run")
         dry_run = True
-
+    
+    region = "us-east-1"
+    if "region" in kwargs:
+        region = kwargs["region"]
+    elif "r" in kwargs:
+        region = kwargs["r"]
+    
     #Assume the cert names are the only two "arguments" (argument is something that doesnt start with '-') 
     try:
         source_cert = args[0]
@@ -67,7 +84,7 @@ def main(kwargs, args):
             sys.exit(1)
     
     #Get list of load balancers
-    elb_client = boto3.client('elb')
+    elb_client = boto3.client('elb', region_name=region)
     load_balancer_list = elb_client.describe_load_balancers()
     ebs_list = list()
         
@@ -107,7 +124,7 @@ def main(kwargs, args):
                     replaced_string = re.sub(source_cert, dest_cert, listener["Listener"]["SSLCertificateId"])
                     print("Replacing " + listener["Listener"]["SSLCertificateId"] + " with " + replaced_string + " in loadbalancer: " + str(name))
                     if not dry_run:
-                        pass
+                        elb_client.set_load_balancer_listener_ssl_certificate(LoadBalancerName= lb_name[0], LoadBalancerPort= listener["Listener"]["LoadBalancerPort"], SSLCertificateId = replaced_string)    
                     #Try to get the ebs name, if there is one for this load balancer
                     if ebs_name is not None:
                         ebs_list.append(ebs_name)
@@ -128,8 +145,11 @@ def parse_sysargs():
                 else:
                     args.append(arg)
                 continue
-            if current_key is not None and not arg.startswith("-"):
+            if current_key is None and not arg.startswith("-"):
                 args.append(arg)
+            elif current_key is not None and not arg.startswith("-"):
+                kwargs[current_key] = arg
+                current_key = None
             else:
                 kwargs[current_key] = None
                 current_key = arg.lstrip('-')
@@ -138,7 +158,6 @@ def parse_sysargs():
             current_key = None
     except IndexError:
         args.append(sys.argv[1])
-
     return kwargs, args
 
 
