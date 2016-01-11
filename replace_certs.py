@@ -42,7 +42,7 @@ def verify_certs_exist(source_cert, dest_cert):
 def main(kwargs, args):
 
     #TODO: Change to false before production
-    dry_run = True
+    dry_run = False
     if "dry-run" in kwargs or "n" in kwargs:
         print("Dry run")
         dry_run = True
@@ -58,6 +58,14 @@ def main(kwargs, args):
     #Verify certs exist
     verify_certs_exist(source_cert, dest_cert)
 
+    if not dry_run:
+        print("!!!WARNING!!!") 
+        print("This script could make very dangerous changes, and it's recommended to run it with a --dry-run (-n) to see what it will change before it does it.")
+        response = raw_input("Please respond 'yes' if you understand the consequences: ")
+        if response != "yes":
+            print("Aborting changes.")
+            sys.exit(1)
+    
     #Get list of load balancers
     elb_client = boto3.client('elb')
     load_balancer_list = elb_client.describe_load_balancers()
@@ -74,21 +82,38 @@ def main(kwargs, args):
 
         #We need the TagDescriptions value, which is a list with one element (since we only passed in one name), and we need the Tags value
         tags = response["TagDescriptions"][0]["Tags"]
+        name = None 
+        ebs_name = None
+        stack_name = None
+
+        for tag in tags:
+            if tag["Key"] == "Name":
+                name = tag["Value"]
+            if tag["Key"] == "elasticbeanstalk:environment-name":
+                ebs_name = tag["Value"]
+            if tag["Key"] == "aws:cloudformation:stack-name":
+                stack_name = tag["Value"]
+
+        if name is None:
+            if ebs_name is not None:
+                name = ebs_name
+            else:
+                name = stack_name
 
         #Drill down and make sure the listener is HTTPS protocol, make sure source_cert is part of the SSLCertificateId string, and replace that part with dest_cert
         for listener in lb["ListenerDescriptions"]:
             if listener["Listener"]["Protocol"] == "HTTPS":
-                if source_cert in listener["Listener"]["SSLCertificateId"]:
-                    print("Replacing " + source_cert + " with " + dest_cert + " in " + lb_name[0])
+                if source_cert == listener["Listener"]["SSLCertificateId"].split("/")[-1]:
                     replaced_string = re.sub(source_cert, dest_cert, listener["Listener"]["SSLCertificateId"])
+                    print("Replacing " + listener["Listener"]["SSLCertificateId"] + " with " + replaced_string + " in loadbalancer: " + str(name))
                     if not dry_run:
-                        print "changes!!!!!"
-                    #Try to get the ebs name, if there is one for this load balancer
-                    try:
-                        print str(tags)
-                        ebs_list.append(tags[0]["elasticbeanstalk:environment-name"])
-                    except KeyError:
                         pass
+                    #Try to get the ebs name, if there is one for this load balancer
+                    if ebs_name is not None:
+                        ebs_list.append(ebs_name)
+
+    for bs in ebs_list:
+        print "Replacing " + source_cert + " with " + dest_cert + " in beanstalk: " + bs
 
 #Modified From maestro
 def parse_sysargs():
